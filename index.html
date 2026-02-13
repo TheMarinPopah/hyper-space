@@ -1,12 +1,387 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Asteroids</title>
-  <link rel="stylesheet" href="style.css">
+  <title>Gravity Dodge OMEGA</title>
+  <style>
+    body { margin:0; overflow:hidden; background:black; font-family:Arial; }
+    canvas { display:block; }
+    #ui {
+      position:absolute;
+      top:10px;
+      left:50%;
+      transform:translateX(-50%);
+      color:white;
+      text-shadow:0 0 10px cyan;
+      font-size:18px;
+      z-index:10;
+    }
+    #shop {
+      position:absolute;
+      bottom:10px;
+      left:50%;
+      transform:translateX(-50%);
+      padding:10px 20px;
+      background:rgba(0,0,0,0.7);
+      color:white;
+      border:2px solid cyan;
+      cursor:pointer;
+      font-size:18px;
+      z-index:10;
+    }
+  </style>
 </head>
 <body>
-  <canvas id="myCanvas"></canvas>
-  <script src="script.js"></script>
+
+<div id="ui">
+Score: <span id="score">0</span> |
+High: <span id="high">0</span> |
+SlowMo: <span id="slowmo">Ready</span>
+</div>
+
+<div id="shop">SHOP</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+/* ================= PLAYER ================= */
+let player = {
+  x: canvas.width/2,
+  y: canvas.height/2,
+  vx: 0,
+  vy: 0,
+  size: 18,
+  accel: 0.6, // stronger sliding
+  maxSpeed: 6,
+  friction: 0.95, // stronger slide
+  bulletPower: 1
+};
+
+/* ================= SLOW MOTION ================= */
+let slowMoActive = false;
+let slowMoTime = 0;
+let slowMoCooldown = 0;
+
+let keys = {};
+let bullets = [];
+let asteroids = [];
+let particles = [];
+let popups = [];
+let yellowDots = [];
+let score = 0;
+let highScore = localStorage.highScore || 0;
+let difficulty = 0.5;
+
+/* ================= STARS ================= */
+let stars = [];
+for(let i=0;i<200;i++){
+  stars.push({x:Math.random()*canvas.width,y:Math.random()*canvas.height,size:Math.random()*2+1,speed:Math.random()*0.5+0.2});
+}
+
+/* ================= INPUT ================= */
+document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+/* ================= MOVEMENT ================= */
+function updatePlayer(){
+  let accelFactor = player.accel;
+  let frictionFactor = player.friction;
+
+  // Shift = slow motion
+  if(keys["shift"] && slowMoCooldown <= 0 && !slowMoActive){
+    slowMoActive = true;
+    slowMoTime = 300; // 5 sec
+  }
+
+  if(slowMoActive){
+    accelFactor *= 0.3;
+    frictionFactor = 0.99; // slide longer
+    slowMoTime--;
+    document.getElementById("slowmo").textContent = Math.ceil(slowMoTime/60) + "s";
+    if(slowMoTime <= 0){
+      slowMoActive = false;
+      slowMoCooldown = 1800; // 30 sec cooldown
+    }
+  } else {
+    if(slowMoCooldown > 0){
+      slowMoCooldown--;
+      document.getElementById("slowmo").textContent = "Cooldown: " + Math.ceil(slowMoCooldown/60) + "s";
+    } else {
+      document.getElementById("slowmo").textContent = "Ready";
+    }
+  }
+
+  if(keys["a"] || keys["arrowleft"]) player.vx -= accelFactor;
+  if(keys["d"] || keys["arrowright"]) player.vx += accelFactor;
+  if(keys["w"] || keys["arrowup"]) player.vy -= accelFactor;
+  if(keys["s"] || keys["arrowdown"]) player.vy += accelFactor;
+
+  // Strong sliding
+  player.vx *= frictionFactor;
+  player.vy *= frictionFactor;
+
+  player.vx = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.vx));
+  player.vy = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.vy));
+
+  player.x += player.vx;
+  player.y += player.vy;
+
+  // Keep in screen
+  player.x = Math.max(player.size, Math.min(canvas.width-player.size, player.x));
+  player.y = Math.max(player.size, Math.min(canvas.height-player.size, player.y));
+
+  // Particle trail
+  particles.push({
+    x: player.x,
+    y: player.y,
+    dx: (Math.random()-0.5)*1.5,
+    dy: (Math.random()-0.5)*1.5,
+    life: 20,
+    color: "cyan"
+  });
+}
+
+/* ================= SHOOT ================= */
+document.addEventListener("keydown", e=>{
+  if(e.code==="Space"){
+    bullets.push({x:player.x,y:player.y,vx:0,vy:-10*player.bulletPower});
+  }
+});
+
+/* ================= ASTEROIDS ================= */
+function spawnAsteroid(){
+  const size = Math.random()*20 + 20;
+  const speed = Math.random()*2 + 1 + difficulty;
+  let color = "gray";
+  if(speed>3) color="orange";
+  if(speed>4) color="red";
+  asteroids.push({
+    x:Math.random()*canvas.width,
+    y:-50,
+    size,
+    speed,
+    hp:Math.ceil(size/10),
+    boss:false,
+    color
+  });
+}
+
+/* ================= YELLOW DOTS ================= */
+function spawnYellowDot(){
+  yellowDots.push({
+    x: Math.random()*canvas.width,
+    y: Math.random()*canvas.height/2,
+    size: 6,
+    life: 300
+  });
+}
+
+/* ================= PARTICLES ================= */
+function createExplosion(x,y,color,count=40){
+  for(let i=0;i<count;i++){
+    particles.push({
+      x,y,
+      dx:(Math.random()-0.5)*6,
+      dy:(Math.random()-0.5)*6,
+      life:40,
+      color
+    });
+  }
+}
+
+/* ================= COLLISION ================= */
+function collision(a,b,sizeA,sizeB){
+  return Math.hypot(a.x-b.x,a.y-b.y)<sizeA+sizeB;
+}
+
+/* ================= DRAW ASTEROID ================= */
+function drawAsteroid(a){
+  ctx.fillStyle = a.color;
+  ctx.beginPath();
+  ctx.arc(a.x,a.y,a.size,0,Math.PI*2);
+  ctx.fill();
+
+  // Crater particles
+  for(let i=0;i<3;i++){
+    particles.push({
+      x: a.x + (Math.random()-0.5)*a.size,
+      y: a.y + (Math.random()-0.5)*a.size,
+      dx: (Math.random()-0.5)*2,
+      dy: (Math.random()-0.5)*2,
+      life: 20,
+      color: "#555"
+    });
+  }
+}
+
+/* ================= DRAW PLAYER ================= */
+function drawPlayer(){
+  ctx.fillStyle="cyan";
+  ctx.beginPath();
+  ctx.arc(player.x,player.y,player.size,0,Math.PI*2);
+  ctx.fill();
+}
+
+/* ================= DRAW YELLOW DOTS ================= */
+function drawYellowDots(){
+  yellowDots.forEach((d,i)=>{
+    ctx.fillStyle="yellow";
+    ctx.shadowColor="yellow";
+    ctx.shadowBlur=10;
+    ctx.beginPath();
+    ctx.arc(d.x,d.y,d.size,0,Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+
+    d.life--;
+    if(d.life<=0) yellowDots.splice(i,1);
+
+    if(collision(player,d,d.size,player.size)){
+      score += 100;
+      createPopup(d.x,d.y,"+100");
+      yellowDots.splice(i,1);
+    }
+  });
+}
+
+/* ================= SCORE POPUPS ================= */
+function createPopup(x,y,value){
+  popups.push({x,y,value,life:40});
+}
+
+/* ================= GAME LOOP ================= */
+function update(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // Stars background
+  stars.forEach(s=>{
+    s.y += s.speed;
+    if(s.y>canvas.height) s.y=0;
+    ctx.fillStyle="white";
+    ctx.fillRect(s.x,s.y,s.size,s.size);
+  });
+
+  updatePlayer();
+
+  // Player
+  drawPlayer();
+
+  // Bullets
+  bullets.forEach((b,i)=>{
+    b.y+=b.vy;
+    ctx.fillStyle="yellow";
+    ctx.fillRect(b.x-2,b.y,4,10);
+    if(b.y<0) bullets.splice(i,1);
+  });
+
+  // Asteroids
+  asteroids.forEach((a,i)=>{
+    a.y+=a.speed;
+
+    // Asteroids follow player if close
+    let dx = player.x - a.x;
+    let dy = player.y - a.y;
+    let dist = Math.hypot(dx,dy);
+    if(dist < 200){ // follow radius
+      a.x += dx*0.01; // small homing
+      a.y += dy*0.01;
+    }
+
+    drawAsteroid(a);
+
+    bullets.forEach((b,bi)=>{
+      if(collision(a,b,a.size,5)){
+        a.hp--;
+        bullets.splice(bi,1);
+        if(a.hp<=0){
+          score+=a.boss?500:50;
+          createPopup(a.x,a.y,a.boss?"+500":"+50");
+          createExplosion(a.x,a.y,a.boss?"purple":"gray",60);
+          asteroids.splice(i,1);
+        }
+      }
+    });
+
+    if(collision(a,player,a.size,player.size)){
+      createExplosion(player.x,player.y,"red",100);
+      if(score>highScore){
+        highScore=score;
+        localStorage.highScore=highScore;
+      }
+      // Restart game
+      score=0;
+      difficulty = 0.5;
+      player.x = canvas.width/2;
+      player.y = canvas.height/2;
+      player.vx = 0;
+      player.vy = 0;
+      asteroids = [];
+      bullets = [];
+      yellowDots = [];
+    }
+  });
+
+  // Yellow dots
+  drawYellowDots();
+
+  // Particles
+  particles.forEach((p,i)=>{
+    p.x+=p.dx;
+    p.y+=p.dy;
+    p.life--;
+    ctx.fillStyle=p.color;
+    ctx.fillRect(p.x,p.y,3,3);
+    if(p.life<=0) particles.splice(i,1);
+  });
+
+  // Popups
+  popups.forEach((p,i)=>{
+    p.y-=1;
+    p.life--;
+    ctx.fillStyle="white";
+    ctx.fillText(p.value,p.x,p.y);
+    if(p.life<=0) popups.splice(i,1);
+  });
+
+  score++;
+  // Gradual difficulty increase
+  difficulty += 0.0002;
+
+  if(Math.random()<0.01 + difficulty*0.01) spawnAsteroid();
+  if(Math.random()<0.005) spawnYellowDot();
+
+  document.getElementById("score").textContent=Math.floor(score);
+  document.getElementById("high").textContent=highScore;
+
+  requestAnimationFrame(update);
+}
+
+update();
+
+/* ================= SHOP ================= */
+const shop = document.getElementById("shop");
+shop.addEventListener("click", ()=>{
+  const upgrade = prompt(
+`SHOP - Points: ${Math.floor(score)}
+1) Increase size (-500 points)
+2) Increase speed (-500 points)
+3) Increase bullet power (-500 points)
+Enter number:`
+  );
+  if(!upgrade) return;
+  const cost = 500;
+  if(score < cost){ alert("Not enough points!"); return; }
+  switch(upgrade){
+    case "1": player.size += 3; score -= cost; break;
+    case "2": player.maxSpeed += 2; score -= cost; break;
+    case "3": player.bulletPower += 0.5; score -= cost; break;
+    default: break;
+  }
+});
+</script>
 </body>
 </html>
