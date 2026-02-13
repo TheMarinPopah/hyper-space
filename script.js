@@ -19,12 +19,14 @@ function resizeCanvas() {
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
+// paste code here
+
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = "white";
   ctx.font = "40px Arial";
-  ctx.fillText("Separate CSS & JS Working!", 50, 100);
+  ctx.fillText("Asteroids coming soon", 50, 100);
 
   requestAnimationFrame(draw);
 }
